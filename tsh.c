@@ -380,9 +380,23 @@ static int
 builtin_cmd(char **argv) 
 {
 
-	// Prevent an "unused parameter" warning.  REMOVE THIS STATEMENT!
-	(void)argv;
-	return (0);     // This is not a built-in command.
+	switch(argv[0]) {
+		case "bg":
+		case "fg":
+		do_bgfg(argv);
+			break;
+		case "quit":
+			exit(0);
+			break;
+		case "jobs":
+			listjobs(jobs);
+			break;
+		default:
+			app_error("Not a built in command");
+			return(1);
+			break;
+	}
+	return(0);
 }
 
 /* 
