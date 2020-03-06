@@ -46,6 +46,12 @@ struct Job {
 	int state;              // UNDEF, FG, BG, or ST
 	char cmdline[MAXLINE];  // command line
 };
+
+struct list {
+	char *name;
+	struct list *tail_list;
+};
+
 typedef volatile struct Job *JobP;
 
 /*
@@ -59,6 +65,8 @@ extern char **environ;             // defined by libc
 
 static char prompt[] = "tsh> ";    // command line prompt (DO NOT CHANGE)
 static bool verbose = false;       // If true, print additional output.
+
+static struct list paths;
 
 /*
  * The following array can be used to map a signal number to its name.
@@ -400,7 +408,6 @@ parseline(const char *cmdline, char **argv)
 static int
 builtin_cmd(char **argv) 
 {
-
 	switch(argv[0]) {
 		case "bg":
 		case "fg":
@@ -413,7 +420,7 @@ builtin_cmd(char **argv)
 			listjobs(jobs);
 			break;
 		default:
-			app_error("Not a built in command");
+			app_error("Not a built-in command");
 			return(1);
 			break;
 	}
@@ -432,9 +439,20 @@ builtin_cmd(char **argv)
 static void
 do_bgfg(char **argv) 
 {
+	int job = argv[1];
 
-	// Prevent an "unused parameter" warning.  REMOVE THIS STATEMENT!
-	(void)argv;
+	switch(argv[0]) {
+		case "bg":
+			// Send SIGCONT to the specified job
+			break;
+		case "fg":
+			break;
+		default:
+			app_error("Not a bg or fg command");
+			return(1);
+			break;
+	}
+	return(0);
 }
 
 /* 
@@ -466,10 +484,21 @@ waitfg(pid_t pid)
  */
 static void
 initpath(const char *pathstr)
-{
-
-	// Prevent an "unused parameter" warning.  REMOVE THIS STATEMENT!
-	(void)pathstr;
+{	
+	struct list pathList = malloc(sizeof(struct list));
+	bool first = true;
+	while ((found = strsep(&pathstr,":")) != NULL) {
+		if (found == "") {
+			getcwd(found, sizeof(found));
+		}
+		struct list pathListTemp = malloc(sizeof(struct list));
+		pathListTemp->name = found;
+		if (!first) {
+			pathListTemp->tail_list = pathList;
+			paths = pathList;
+		}
+		pathList = pathListTemp;
+	}
 }
 
 /*
