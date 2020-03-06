@@ -3,7 +3,7 @@
  *
  * This program implements a tiny shell with job control.
  *
- * <Put your name(s) and NetID(s) here>
+ * Alex Li asl11
  */
 
 #include <sys/types.h>
@@ -281,9 +281,24 @@ main(int argc, char **argv)
 static void
 eval(const char *cmdline) 
 {
+	char **argv;
+	int bg = parseline(cmdline, argv);
+	pid_t pid, wpid;
 
-	// Prevent an "unused parameter" warning.  REMOVE THIS STATEMENT!
-	(void)cmdline;
+	if (strcmp(argv[0],"quit") == 0 || (strcmp(argv[0],"jobs") == 0 || strcmp(argv[0],"bg") == 0 || strcmp(argv[0],"fg") == 0) {
+		builtin_cmd(argv);
+		return;
+	} 
+
+	// Not a built-in command 
+	pid = fork();
+	if (pid == 0) {
+		//Child
+		execvp(argv[0], argv);
+	} else {
+		//Parent
+
+	}
 }
 
 /* 
