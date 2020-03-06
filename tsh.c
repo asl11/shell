@@ -3,7 +3,7 @@
  *
  * This program implements a tiny shell with job control.
  *
- * <Put your name(s) and NetID(s) here>
+ * Alex Li asl11
  */
 
 #include <sys/types.h>
@@ -273,7 +273,7 @@ main(int argc, char **argv)
  * when we type ctrl-c (ctrl-z) at the keyboard.  
  *
  * Requires:
- *   <to be filled in by the student(s)>
+ *   cmdline: The text from the command line to be passed to parseline
  *
  * Effects:
  *   <to be filled in by the student(s)>
@@ -281,10 +281,44 @@ main(int argc, char **argv)
 static void
 eval(const char *cmdline) 
 {
+	char **argv;
+	int bg = parseline(cmdline, argv);
+	pid_t pid, childpid;
 
-	// Prevent an "unused parameter" warning.  REMOVE THIS STATEMENT!
-	(void)cmdline;
+	if (strcmp(argv[0],"quit") == 0 || (strcmp(argv[0],"jobs") == 0 || strcmp(argv[0],"bg") == 0 || strcmp(argv[0],"fg") == 0) {
+		builtin_cmd(argv);
+		return;
+	} 
+
+	// Not a built-in command 
+	int status;
+	sigset_t temp;
+	sigemptyset (&temp);
+	sigaddset(&temp, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &temp, NULL);
+	// Blocking here to avoid datarace if child executes before addjob.
+	pid = fork();
+	if (pid == 0) {
+		// Child
+		sigprocmask(SIG_UNBLOCK, &temp, NULL); 
+		execve(argv[0], argv, argv);
+		// Third input to execve is an environment, I don't know what to pass.
+		app_error("Error executing function"); // Execve never returns.
+	} else {
+		// Parent
+		addjob(pid); 
+		sigprocmask(SIG_UNBLOCK, &temp, NULL);
+		if (bg == 1) {
+			//Run in foreground
+			childpid = waitpid(pid, &status, WUNTRACED); 
+			while (!WIFEXITED(status) && !WIFSIGNALLED(status)) {
+				childpid = waitpid(pid, &status, WUNTRACED);
+			}
+		}
+		return; // Either is a bg task, or fg task finished. 
+
 }
+
 
 /* 
  * parseline - Parse the command line and build the argv array.
