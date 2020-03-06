@@ -291,6 +291,8 @@ eval(const char *cmdline)
 	} 
 
 	// Not a built-in command 
+	if (bg==0)
+		bg = 2; // For some reason bg = 2 for addjob, but 0 from parseline.
 	int status;
 	sigset_t temp;
 	sigemptyset (&temp);
@@ -306,7 +308,7 @@ eval(const char *cmdline)
 		app_error("Error executing function"); // Execve never returns.
 	} else {
 		// Parent
-		addjob(pid); 
+		addjob(jobs, pid, bg, cmdline); 
 		sigprocmask(SIG_UNBLOCK, &temp, NULL);
 		if (bg == 1) {
 			//Run in foreground
