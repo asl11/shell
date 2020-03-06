@@ -364,7 +364,6 @@ parseline(const char *cmdline, char **argv)
 static int
 builtin_cmd(char **argv) 
 {
-
 	switch(argv[0]) {
 		case "bg":
 		case "fg":
@@ -377,7 +376,7 @@ builtin_cmd(char **argv)
 			listjobs(jobs);
 			break;
 		default:
-			app_error("Not a built in command");
+			app_error("Not a built-in command");
 			return(1);
 			break;
 	}
@@ -396,9 +395,20 @@ builtin_cmd(char **argv)
 static void
 do_bgfg(char **argv) 
 {
+	int job = argv[1];
 
-	// Prevent an "unused parameter" warning.  REMOVE THIS STATEMENT!
-	(void)argv;
+	switch(argv[0]) {
+		case "bg":
+			// Send SIGCONT to the specified job
+			break;
+		case "fg":
+			break;
+		default:
+			app_error("Not a bg or fg command");
+			return(1);
+			break;
+	}
+	return(0);
 }
 
 /* 
