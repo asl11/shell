@@ -66,7 +66,7 @@ extern char **environ;             // defined by libc
 static char prompt[] = "tsh> ";    // command line prompt (DO NOT CHANGE)
 static bool verbose = false;       // If true, print additional output.
 
-static struct list paths;
+static struct list *paths;
 
 /*
  * The following array can be used to map a signal number to its name.
@@ -291,7 +291,7 @@ eval(const char *cmdline)
 {
 	char **argv;
 	int bg = parseline(cmdline, argv);
-	pid_t pid, childpid;
+	pid_t pid; //, childpid;
 
 	if (argv[0] == NULL) {
 		// Ignore empty console input.
@@ -299,7 +299,8 @@ eval(const char *cmdline)
 	}
 
 
-	if (strcmp(argv[0],"quit") == 0 || (strcmp(argv[0],"jobs") == 0 || strcmp(argv[0],"bg") == 0 || strcmp(argv[0],"fg") == 0) {
+	if (strcmp(argv[0],"quit") == 0 || (strcmp(argv[0],"jobs") == 0 ||
+		strcmp(argv[0],"bg") == 0 || strcmp(argv[0],"fg") == 0)) {
 		builtin_cmd(argv);
 		return;
 	} 
@@ -307,7 +308,7 @@ eval(const char *cmdline)
 	// Not a built-in command,
 	if (bg == 0)
 		bg = 2; // For some reason bg = 2 for addjob, but 0 from parseline.
-	int status;
+	// int status;
 	sigset_t temp, prev, all;
 	sigfillset(&all);
 	sigemptyset (&temp);
@@ -321,7 +322,8 @@ eval(const char *cmdline)
 		// Child
 		sigprocmask(SIG_SETMASK, &prev, NULL); 
 		// Try to execute on every path in path. 
-		for (list head = paths; head != NULL; head = head -> tail_list) {
+		struct list *head;
+		for (head = paths; head != NULL; head = head->tail_list) {
 			execve(head->name, argv, environ);
 		}
 		// Third input to execve is an environment, I don't know what to pass.
@@ -335,8 +337,8 @@ eval(const char *cmdline)
 			//Run in foreground
 			waitfg(pid);
 		}
-		return; // Either is a bg task, or fg task finished. 
-
+	}
+	return; // Either is a bg task, or fg task finished. 
 }
 
 
@@ -418,21 +420,15 @@ parseline(const char *cmdline, char **argv)
 static int
 builtin_cmd(char **argv) 
 {
-	switch(argv[0]) {
-		case "bg":
-		case "fg":
+	if(strcmp(argv[0], "bg") == 0 || strcmp(argv[0], "fg") == 0) {
 		do_bgfg(argv);
-			break;
-		case "quit":
-			exit(0);
-			break;
-		case "jobs":
-			listjobs(jobs);
-			break;
-		default:
-			app_error("Not a built-in command");
-			return(1);
-			break;
+	} else if(strcmp(argv[0], "quit") == 0) {
+		exit(0);
+	} else if(strcmp(argv[0], "jobs") == 0) {
+		listjobs(jobs);
+	} else {
+		app_error("Not a built-in command");
+		return(1);
 	}
 	return(0);
 }
@@ -450,44 +446,38 @@ static void
 do_bgfg(char **argv) 
 {
 	char* job = argv[1];
-	boolean isPid = true; 
+	bool isPid = true; 
 	int id;
 	pid_t pid;
 	if (job[0] == '%') {
 		isPid = false;
-		memmove(job, job+1, strlen(job))
-	} 
+		memmove(job, job+1, strlen(job));
+	}
 	id = atoi(job);
 	pid = (pid_t) id;
 	if (id == 0) {
 		app_error("Jid/Pid < 1");
 	}
 
-	switch(argv[0]) {
-		case "bg":
+	if (strcmp(argv[0], "bg") == 0) {
 		// Send SIGCONT to the specified job
-			if (isPid) {
-				kill(pid, SIGCONT); // need to convert int to pid_t?
-			} else {
-				pid = getjobjid(jobs, id)->pid;
-				kill(pid, SIGCONT);
-			}
-			break;
-		case "fg":
-			if (isPid) {
-				kill(pid, SIGCONT); // need to convert int to pid_t?
-			} else {
-				pid = getjobjid(jobs, id)->pid;
-				kill(pid, SIGCONT);
-			}
-			waitfg(pid);
-			break;
-		default:
-			app_error("Not a bg or fg command");
-			return(1);
-			break;
+		if (isPid) {
+			kill(pid, SIGCONT); // need to convert int to pid_t?
+		} else {
+			pid = getjobjid(jobs, id)->pid;
+			kill(pid, SIGCONT);
+		}
+	} else if (strcmp(argv[0], "fg") == 0) {
+		if (isPid) {
+			kill(pid, SIGCONT); // need to convert int to pid_t?
+		} else {
+			pid = getjobjid(jobs, id)->pid;
+			kill(pid, SIGCONT);
+		}
+		waitfg(pid);
+	} else {
+		app_error("Not a bg or fg command");
 	}
-	return(0);
 }
 
 /* 
@@ -504,12 +494,10 @@ waitfg(pid_t pid)
 {
 	int status;
 
-	childpid = waitpid(pid, &status, WUNTRACED); 
+	waitpid(pid, &status, WUNTRACED); 
 	while (!WIFEXITED(status) && !WIFSIGNALLED(status)) {
-		childpid = waitpid(pid, &status, WUNTRACED);
+		waitpid(pid, &status, WUNTRACED);
 	}
-
-	return (0); // Can make it return something else on error;
 }
 
 /* 
@@ -525,13 +513,14 @@ waitfg(pid_t pid)
 static void
 initpath(const char *pathstr)
 {	
-	struct list pathList = malloc(sizeof(struct list));
+	struct list *pathList = malloc(sizeof(struct list));
 	bool first = true;
+	char *found;
 	while ((found = strsep(&pathstr,":")) != NULL) {
-		if (found == "") {
+		if (strcmp(found, "") == 0) {
 			getcwd(found, sizeof(found));
 		}
-		struct list pathListTemp = malloc(sizeof(struct list));
+		struct list *pathListTemp = malloc(sizeof(struct list));
 		pathListTemp->name = found;
 		if (!first) {
 			pathListTemp->tail_list = pathList;
@@ -592,6 +581,8 @@ sigint_handler(int signum)
 
 	// Prevent an "unused parameter" warning.
 	(void)signum;
+	Sio_puts("Terminating process after receipt of SIGINT signal\n");
+	_exit(0);
 }
 
 /*
