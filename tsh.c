@@ -293,37 +293,47 @@ eval(const char *cmdline)
 	int bg = parseline(cmdline, argv);
 	pid_t pid, childpid;
 
+	if (argv[0] == NULL) {
+		// Ignore empty console input.
+		return;
+	}
+
+
 	if (strcmp(argv[0],"quit") == 0 || (strcmp(argv[0],"jobs") == 0 || strcmp(argv[0],"bg") == 0 || strcmp(argv[0],"fg") == 0) {
 		builtin_cmd(argv);
 		return;
 	} 
 
-	// Not a built-in command 
-	if (bg==0)
+	// Not a built-in command,
+	if (bg == 0)
 		bg = 2; // For some reason bg = 2 for addjob, but 0 from parseline.
 	int status;
-	sigset_t temp;
+	sigset_t temp, prev, all;
+	sigfillset(&all);
 	sigemptyset (&temp);
 	sigaddset(&temp, SIGCHLD);
-	sigprocmask(SIG_BLOCK, &temp, NULL);
+
+	signal(SIGCHLD, sigchld_handler);
+	sigprocmask(SIG_BLOCK, &temp, &prev);
 	// Blocking here to avoid datarace if child executes before addjob.
 	pid = fork();
 	if (pid == 0) {
 		// Child
-		sigprocmask(SIG_UNBLOCK, &temp, NULL); 
-		execve(argv[0], argv, argv);
+		sigprocmask(SIG_SETMASK, &prev, NULL); 
+		// Try to execute on every path in path. 
+		for (list head = paths; head != NULL; head = head -> tail_list) {
+			execve(head->name, argv, environ);
+		}
 		// Third input to execve is an environment, I don't know what to pass.
 		app_error("Error executing function"); // Execve never returns.
 	} else {
 		// Parent
+		sigprocmask(SIG_BLOCK, &all, NULL);
 		addjob(jobs, pid, bg, cmdline); 
-		sigprocmask(SIG_UNBLOCK, &temp, NULL);
+		sigprocmask(SIG_UNBLOCK, &prev, NULL);
 		if (bg == 1) {
 			//Run in foreground
-			childpid = waitpid(pid, &status, WUNTRACED); 
-			while (!WIFEXITED(status) && !WIFSIGNALLED(status)) {
-				childpid = waitpid(pid, &status, WUNTRACED);
-			}
+			waitfg(pid);
 		}
 		return; // Either is a bg task, or fg task finished. 
 
@@ -439,13 +449,38 @@ builtin_cmd(char **argv)
 static void
 do_bgfg(char **argv) 
 {
-	int job = argv[1];
+	char* job = argv[1];
+	boolean isPid = true; 
+	int id;
+	pid_t pid;
+	if (job[0] == '%') {
+		isPid = false;
+		memmove(job, job+1, strlen(job))
+	} 
+	id = atoi(job);
+	pid = (pid_t) id;
+	if (id == 0) {
+		app_error("Jid/Pid < 1");
+	}
 
 	switch(argv[0]) {
 		case "bg":
-			// Send SIGCONT to the specified job
+		// Send SIGCONT to the specified job
+			if (isPid) {
+				kill(pid, SIGCONT); // need to convert int to pid_t?
+			} else {
+				pid = getjobjid(jobs, id)->pid;
+				kill(pid, SIGCONT);
+			}
 			break;
 		case "fg":
+			if (isPid) {
+				kill(pid, SIGCONT); // need to convert int to pid_t?
+			} else {
+				pid = getjobjid(jobs, id)->pid;
+				kill(pid, SIGCONT);
+			}
+			waitfg(pid);
 			break;
 		default:
 			app_error("Not a bg or fg command");
@@ -467,9 +502,14 @@ do_bgfg(char **argv)
 static void
 waitfg(pid_t pid)
 {
+	int status;
 
-	// Prevent an "unused parameter" warning.  REMOVE THIS STATEMENT!
-	(void)pid;
+	childpid = waitpid(pid, &status, WUNTRACED); 
+	while (!WIFEXITED(status) && !WIFSIGNALLED(status)) {
+		childpid = waitpid(pid, &status, WUNTRACED);
+	}
+
+	return (0); // Can make it return something else on error;
 }
 
 /* 
@@ -522,8 +562,17 @@ static void
 sigchld_handler(int signum)
 {
 
-	// Prevent an "unused parameter" warning.
-	(void)signum;
+	sigset_t temp, prev;
+	pid_t pid;
+
+	Sigfillset(&temp);
+	while ((pid = waitpid(-1, NULL, 0)) > 0) {
+		// Reap Children mwahaha.
+		Sigprocmask(SIG_BLOCK, &temp, &prev);
+		deletejob(pid);
+		Sigprocmask(SIG_SETMASK, &prev, NULL);
+	}
+
 }
 
 /* 
