@@ -289,9 +289,8 @@ main(int argc, char **argv)
 static void
 eval(const char *cmdline) 
 {
-	char **argv;
-	int bg;
-	bg = parseline(cmdline, argv);
+	char *argv[MAXARGS];
+	int bg = parseline(cmdline, argv);
 	pid_t pid; //, childpid;
 
 	if (argv[0] == NULL) {
@@ -517,8 +516,9 @@ initpath(const char *pathstr)
 {	
 	struct list *pathList = malloc(sizeof(struct list));
 	bool first = true;
-	char *found;
-	while ((found = strsep(&pathstr,":")) != NULL) {
+	char *found = malloc((strlen(pathstr) + 1) * 4);
+	strcpy(found, pathstr);
+	while ((found = strsep(&found,":")) != NULL) {
 		if (strcmp(found, "") == 0) {
 			getcwd(found, sizeof(found));
 		}
