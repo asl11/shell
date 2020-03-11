@@ -585,8 +585,11 @@ sigint_handler(int signum)
 {
 
 	// Prevent an "unused parameter" warning.
-	(void)signum;
-	kill(-(fgpid(jobs)), SIGINT);
+	if (fgpid(jobs) != 0) {
+		if (getpgid(fgpid(jobs)) != -1) {
+			kill(getpgid(fgpid(jobs)) * -1, signum);
+		}
+	}
 	Sio_puts("Sending SIGINT to process after receipt of SIGINT signal\n");
 	_exit(0);
 }
@@ -607,9 +610,12 @@ sigtstp_handler(int signum)
 {
 
 	// Prevent an "unused parameter" warning.
-	(void)signum;
-	kill(fgpid(jobs), SIGTSTP);
-	sio_puts("Terminating process after receipt of SIGTSTP");
+	if (fgpid(jobs) != 0) {
+		if (getpgid(fgpid(jobs)) != -1) {
+			kill(getpgid(fgpid(jobs)) * -1, signum);
+		}
+	}
+	Sio_puts("Sending SIGTSTP to process after receipt of SIGTSTP signal\n");
 	_exit(0);
 }
 
