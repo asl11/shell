@@ -517,7 +517,8 @@ initpath(const char *pathstr)
 	struct list *pathList = malloc(sizeof(struct list));
 	bool first = true;
 	char *found;
-	while ((found = strsep(&pathstr,":")) != NULL) {
+	strcpy(found, pathstr);
+	while ((found = strsep(&found,":")) != NULL) {
 		if (strcmp(found, "") == 0) {
 			getcwd(found, sizeof(found));
 		}
