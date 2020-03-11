@@ -66,7 +66,7 @@ extern char **environ;             // defined by libc
 static char prompt[] = "tsh> ";    // command line prompt (DO NOT CHANGE)
 static bool verbose = false;       // If true, print additional output.
 
-static struct list *paths;
+static volatile struct list *paths;
 
 /*
  * The following array can be used to map a signal number to its name.
@@ -320,9 +320,10 @@ eval(const char *cmdline)
 	pid = fork();
 	if (pid == 0) {
 		// Child
+		setpgid(0,0);
 		sigprocmask(SIG_SETMASK, &prev, NULL); 
 		// Try to execute on every path in path. 
-		struct list *head;
+		volatile struct list *head;
 		for (head = paths; head != NULL; head = head->tail_list) {
 			execve(head->name, argv, environ);
 		}
@@ -554,12 +555,16 @@ sigchld_handler(int signum)
 	sigset_t temp, prev;
 	pid_t pid;
 
-	Sigfillset(&temp);
+	// Don't know what to do with signum
+	(void)signum;
+
+	sigfillset(&temp);
 	while ((pid = waitpid(-1, NULL, 0)) > 0) {
 		// Reap Children mwahaha.
-		Sigprocmask(SIG_BLOCK, &temp, &prev);
-		deletejob(pid);
-		Sigprocmask(SIG_SETMASK, &prev, NULL);
+		sigprocmask(SIG_BLOCK, &temp, &prev);
+		deletejob(jobs, pid);
+		Sio_puts("Terminating children\n");
+		sigprocmask(SIG_SETMASK, &prev, NULL);
 	}
 
 }
@@ -581,7 +586,8 @@ sigint_handler(int signum)
 
 	// Prevent an "unused parameter" warning.
 	(void)signum;
-	Sio_puts("Terminating process after receipt of SIGINT signal\n");
+	kill(-(fgpid(jobs)), SIGINT);
+	Sio_puts("Sending SIGINT to process after receipt of SIGINT signal\n");
 	_exit(0);
 }
 
@@ -602,6 +608,9 @@ sigtstp_handler(int signum)
 
 	// Prevent an "unused parameter" warning.
 	(void)signum;
+	kill(fgpid(jobs), SIGTSTP);
+	sio_puts("Terminating process after receipt of SIGTSTP");
+	_exit(0);
 }
 
 /*
