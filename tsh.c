@@ -66,7 +66,7 @@ extern char **environ;             // defined by libc
 static char prompt[] = "tsh> ";    // command line prompt (DO NOT CHANGE)
 static bool verbose = false;       // If true, print additional output.
 
-static volatile struct list *paths;
+static struct list *paths;
 
 /*
  * The following array can be used to map a signal number to its name.
@@ -200,8 +200,10 @@ main(int argc, char **argv)
 	action.sa_handler = sigint_handler;
 	action.sa_flags = SA_RESTART;
 	sigemptyset(&action.sa_mask);
+	sigaddset(&action.sa_mask, SIGCHLD);
 	if (sigaction(SIGINT, &action, NULL) < 0)
 		unix_error("sigaction error");
+	
 
 	/*
 	 * Install sigtstp_handler() as the handler for SIGTSTP (ctrl-z).  SET
@@ -211,9 +213,10 @@ main(int argc, char **argv)
 	action.sa_handler = sigtstp_handler;
 	action.sa_flags = SA_RESTART;
 	sigemptyset(&action.sa_mask);
+	sigaddset(&action.sa_mask, SIGCHLD);
 	if (sigaction(SIGTSTP, &action, NULL) < 0)
 		unix_error("sigaction error");
-
+	
 	/*
 	 * Install sigchld_handler() as the handler for SIGCHLD (terminated or
 	 * stopped child).  SET action.sa_mask TO REFLECT THE SYNCHRONIZATION
@@ -222,9 +225,11 @@ main(int argc, char **argv)
 	action.sa_handler = sigchld_handler;
 	action.sa_flags = SA_RESTART;
 	sigemptyset(&action.sa_mask);
+	sigaddset(&action.sa_mask, SIGINT);
+	sigaddset(&action.sa_mask, SIGTSTP);
 	if (sigaction(SIGCHLD, &action, NULL) < 0)
 		unix_error("sigaction error");
-
+	
 	/*
 	 * Install sigquit_handler() as the handler for SIGQUIT.  This handler
 	 * provides a clean way for the test harness to terminate the shell.
@@ -236,17 +241,17 @@ main(int argc, char **argv)
 	sigemptyset(&action.sa_mask);
 	if (sigaction(SIGQUIT, &action, NULL) < 0)
 		unix_error("sigaction error");
-
+	
 	// Initialize the search path.
 	path = getenv("PATH");
 	initpath(path);
-
+	
 	// Initialize the jobs list.
 	initjobs(jobs);
 
 	// Execute the shell's read/eval loop.
 	while (true) {
-
+		
 		// Read the command line.
 		if (emit_prompt) {
 			printf("%s", prompt);
@@ -284,7 +289,12 @@ main(int argc, char **argv)
  *   cmdline: The text from the command line to be passed to parseline
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   First checks if the cmdline contains a built in command. If so, 
+ *	 execute it and move on to the next command line. If not, we assume 
+ *   that the first argument must be a command, and we run the command on 
+ *   the paths in initpath. Fork to a child process, and parent process
+ *   will wait depending on whether or not parseline returns a background
+ *   job or foreground job. Calls waitfg to do this. 
  */
 static void
 eval(const char *cmdline) 
@@ -306,35 +316,41 @@ eval(const char *cmdline)
 	} 
 
 	// Not a built-in command,
-	if (bg == 0)
-		bg = 2; // For some reason bg = 2 for addjob, but 0 from parseline.
-	// int status;
-	sigset_t temp, prev, all;
-	sigfillset(&all);
-	sigemptyset (&temp);
+
+	sigset_t temp; //prev, all;
+	// sigfillset(&all);
+	// sigemptyset (&temp);
 	sigaddset(&temp, SIGCHLD);
 
-	signal(SIGCHLD, sigchld_handler);
-	sigprocmask(SIG_BLOCK, &temp, &prev);
+	
+	sigprocmask(SIG_BLOCK, &temp, NULL);
 	// Blocking here to avoid datarace if child executes before addjob.
 	pid = fork();
+
 	if (pid == 0) {
 		// Child
+
 		setpgid(0,0);
-		sigprocmask(SIG_SETMASK, &prev, NULL); 
+		sigprocmask(SIG_UNBLOCK, &temp, NULL); 
 		// Try to execute on every path in path. 
-		volatile struct list *head;
+
+		struct list *head;
+		execve(argv[0],argv,environ);
 		for (head = paths; head != NULL; head = head->tail_list) {
-			execve(head->name, argv, environ);
+			char* temppath = malloc(sizeof(head->name) + sizeof(argv[0]) + 8);
+			temppath = strcat(head->name,"/");
+			temppath = strcat(temppath, argv[0]);
+			execve(temppath, argv, environ);
+
+
 		}
 		// Third input to execve is an environment, I don't know what to pass.
-		app_error("Error executing function"); // Execve never returns.
 	} else {
 		// Parent
-		sigprocmask(SIG_BLOCK, &all, NULL);
-		addjob(jobs, pid, bg, cmdline); 
-		sigprocmask(SIG_UNBLOCK, &prev, NULL);
-		if (bg == 1) {
+
+		addjob(jobs, pid, bg+1, cmdline); 
+		sigprocmask(SIG_UNBLOCK, &temp, NULL);
+		if (bg == 0) {
 			//Run in foreground
 			waitfg(pid);
 		}
@@ -493,12 +509,13 @@ do_bgfg(char **argv)
 static void
 waitfg(pid_t pid)
 {
-	int status;
-
-	waitpid(pid, &status, WUNTRACED); 
-	while (!WIFEXITED(status) && !WIFSIGNALLED(status)) {
-		waitpid(pid, &status, WUNTRACED);
+	int fpid;
+	fpid = fgpid(jobs);
+	while (fpid != 0 && pid == fgpid(jobs)) {
+		fpid = (fgpid(jobs));
+		sleep(1);
 	}
+
 }
 
 /* 
@@ -515,20 +532,28 @@ static void
 initpath(const char *pathstr)
 {	
 	struct list *pathList = malloc(sizeof(struct list));
-	bool first = true;
-	char *found = malloc((strlen(pathstr) + 1) * 4);
-	strcpy(found, pathstr);
-	while ((found = strsep(&found,":")) != NULL) {
+	char *original = malloc((strlen(pathstr) + 1) * 4);
+	strcpy(original, pathstr);
+	char *found;
+
+	while ((found = strsep(&original,":")) != NULL) {
 		if (strcmp(found, "") == 0) {
 			getcwd(found, sizeof(found));
 		}
 		struct list *pathListTemp = malloc(sizeof(struct list));
 		pathListTemp->name = found;
-		if (!first) {
-			pathListTemp->tail_list = pathList;
-			paths = pathList;
-		}
+		pathListTemp->tail_list = pathList;
 		pathList = pathListTemp;
+	}
+
+	paths = pathList;
+
+	if (verbose) {
+		struct list *head;
+		for (head = paths; head != NULL; head = head->tail_list) {
+			printf(head->name);
+			printf("\n");
+		}
 	}
 }
 
@@ -552,20 +577,35 @@ initpath(const char *pathstr)
 static void
 sigchld_handler(int signum)
 {
-
-	sigset_t temp, prev;
 	pid_t pid;
+	int status;
 
 	// Don't know what to do with signum
 	(void)signum;
 
-	sigfillset(&temp);
-	while ((pid = waitpid(-1, NULL, 0)) > 0) {
-		// Reap Children mwahaha.
-		sigprocmask(SIG_BLOCK, &temp, &prev);
-		deletejob(jobs, pid);
-		Sio_puts("Terminating children\n");
-		sigprocmask(SIG_SETMASK, &prev, NULL);
+	while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+		// Reap Children mwahaha
+		if (WIFSTOPPED(status)) {
+			Sio_puts("Job [");
+			Sio_putl(getjobpid(jobs,pid)->jid);
+			Sio_puts("] (");
+			Sio_putl(pid);
+			Sio_puts(") stopped by signal ");
+			Sio_puts(signame[WSTOPSIG(status)]);
+			Sio_puts("\n");
+			getjobpid(jobs,pid)->state = 3; //3 = ST
+		} else if (WIFSIGNALED(status)) {
+			Sio_puts("Job [");
+			Sio_putl(getjobpid(jobs,pid)->jid);
+			Sio_puts("] (");
+			Sio_putl(pid);
+			Sio_puts(") terminated by signal ");
+			Sio_puts(signame[WTERMSIG(status)]);
+			Sio_puts("\n");
+			deletejob(jobs, pid);
+		} else {
+			deletejob(jobs,pid);
+		}
 	}
 
 }
@@ -585,7 +625,6 @@ static void
 sigint_handler(int signum)
 {
 
-	// Prevent an "unused parameter" warning.
 	if (fgpid(jobs) != 0) {
 		if (getpgid(fgpid(jobs)) != -1) {
 			kill(getpgid(fgpid(jobs)) * -1, signum);
