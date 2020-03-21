@@ -305,10 +305,10 @@ eval(const char *cmdline)
 		return;
 	} 
 
-	// Not a built-in command,
+	// Not a built-in command.
 	if (bg == 0)
 		bg = 2; // For some reason bg = 2 for addjob, but 0 from parseline.
-	// int status;
+	
 	sigset_t temp, prev, all;
 	sigfillset(&all);
 	sigemptyset (&temp);
@@ -461,20 +461,22 @@ do_bgfg(char **argv)
 	}
 
 	if (strcmp(argv[0], "bg") == 0) {
-		// Send SIGCONT to the specified job
+		// Send SIGCONT to the specified job.
 		if (isPid) {
-			kill(pid, SIGCONT); // need to convert int to pid_t?
+			kill(pid, SIGCONT);
 		} else {
 			pid = getjobjid(jobs, id)->pid;
 			kill(pid, SIGCONT);
 		}
 	} else if (strcmp(argv[0], "fg") == 0) {
+		// Send SIGCONT to the specified job.
 		if (isPid) {
-			kill(pid, SIGCONT); // need to convert int to pid_t?
+			kill(pid, SIGCONT);
 		} else {
 			pid = getjobjid(jobs, id)->pid;
 			kill(pid, SIGCONT);
 		}
+		// Wait for current foreground process to finish.
 		waitfg(pid);
 	} else {
 		app_error("Not a bg or fg command");

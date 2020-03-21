@@ -6,8 +6,21 @@ COMP 321 Project 4: Unix Shell
 
 DESIGN DESCRIPTION
 
-<Insert a description of your solution in English.  Describe any design
-decisions that you made.  Do not submit pseudo-code.> 
+We went about designing our shell by tacklikng each individual method at a time. Thus, we will describe our design description by going through our approach for each method.
+
+eval:
+In eval, we tried to cover every possible command line input we could expect.
+We started dealing with the cases of an empty console and the built-in commands that were given (e.g. quit, jobs, bg, and fg) and then moved onto non-built-in in commands. ~~~~
+
+builtin_cmd:
+For built in command, we created an if else structure to check which of the built in commands was written to the command line. For example, if the command is bg or fg, then we call the do_bgfg command to do the correct commands. If the command is quit, then we quit out of the program. If jobs is called, then we call the listjobs method. However, if the command doesn't fit into any of these they we throw an error.
+
+do_bgfg:
+In this method, we did some error handling and then checked the first argument in the command line to see if it was bg (background) or fg (foreground). In both, we check to see if we were given the JID or PID. If the JID was given we find the PID and then send a SIGCONT signal to that job. However, if the process is a foreground process then we wait for the current foreground process to finish using the waitfg method.
+
+wait_fg:
+
+
 
 TESTING STRATEGY
 
@@ -15,3 +28,4 @@ TESTING STRATEGY
 you should explain how you tested your code, how you selected your inputs,
 what those inputs were, and why you believe those inputs were sufficient
 to test your code.>
+
