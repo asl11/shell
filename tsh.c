@@ -66,7 +66,7 @@ extern char **environ;             // defined by libc
 static char prompt[] = "tsh> ";    // command line prompt (DO NOT CHANGE)
 static bool verbose = false;       // If true, print additional output.
 
-static volatile struct list *paths;
+static struct list *paths;
 
 /*
  * The following array can be used to map a signal number to its name.
@@ -154,10 +154,14 @@ static size_t	sio_strlen(const char s[]);
 
 /*
  * Requires:
- *   <to be filled in by the student(s)>
+ *   argc, the number of characters in argv, an array of strings representing
+ *   a tokenized command line.
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   Initializes signal handlers, then continuously checks the command line
+ *   for new input. Acts as a shell for input, printing the "tsh> " prompt and 
+ *   then calling eval and parseline to evaluate the input until told to 
+ *   terminate using the builtin command "quit". 
  */
 int
 main(int argc, char **argv) 
@@ -199,9 +203,15 @@ main(int argc, char **argv)
 	 */
 	action.sa_handler = sigint_handler;
 	action.sa_flags = SA_RESTART;
-	sigemptyset(&action.sa_mask);
+	if (sigemptyset(&action.sa_mask) == -1) {
+		unix_error("sigemptyset error");
+	}
+	if (sigaddset(&action.sa_mask, SIGCHLD) == -1) {
+		unix_error("sigaddset error in main");
+	}
 	if (sigaction(SIGINT, &action, NULL) < 0)
 		unix_error("sigaction error");
+	
 
 	/*
 	 * Install sigtstp_handler() as the handler for SIGTSTP (ctrl-z).  SET
@@ -210,10 +220,15 @@ main(int argc, char **argv)
 	 */
 	action.sa_handler = sigtstp_handler;
 	action.sa_flags = SA_RESTART;
-	sigemptyset(&action.sa_mask);
+	if (sigemptyset(&action.sa_mask) == -1) {
+		unix_error("sigemptyset error");
+	}
+	if (sigaddset(&action.sa_mask, SIGCHLD) == -1) {
+		unix_error("sigaddset error in main");
+	}
 	if (sigaction(SIGTSTP, &action, NULL) < 0)
 		unix_error("sigaction error");
-
+	
 	/*
 	 * Install sigchld_handler() as the handler for SIGCHLD (terminated or
 	 * stopped child).  SET action.sa_mask TO REFLECT THE SYNCHRONIZATION
@@ -221,10 +236,18 @@ main(int argc, char **argv)
 	 */
 	action.sa_handler = sigchld_handler;
 	action.sa_flags = SA_RESTART;
-	sigemptyset(&action.sa_mask);
+	if (sigemptyset(&action.sa_mask) == -1) {
+		unix_error("sigemptyset error");
+	}
+	if (sigaddset(&action.sa_mask, SIGINT) == -1) {
+		unix_error("sigaddset error"); 
+	}
+	if (sigaddset(&action.sa_mask, SIGTSTP) == -1) {
+		unix_error("sigaddset error");
+	}
 	if (sigaction(SIGCHLD, &action, NULL) < 0)
 		unix_error("sigaction error");
-
+	
 	/*
 	 * Install sigquit_handler() as the handler for SIGQUIT.  This handler
 	 * provides a clean way for the test harness to terminate the shell.
@@ -236,17 +259,17 @@ main(int argc, char **argv)
 	sigemptyset(&action.sa_mask);
 	if (sigaction(SIGQUIT, &action, NULL) < 0)
 		unix_error("sigaction error");
-
+	
 	// Initialize the search path.
 	path = getenv("PATH");
 	initpath(path);
-
+	
 	// Initialize the jobs list.
 	initjobs(jobs);
 
 	// Execute the shell's read/eval loop.
 	while (true) {
-
+		
 		// Read the command line.
 		if (emit_prompt) {
 			printf("%s", prompt);
@@ -284,7 +307,12 @@ main(int argc, char **argv)
  *   cmdline: The text from the command line to be passed to parseline
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   First checks if the cmdline contains a built in command. If so, 
+ *	 execute it and move on to the next command line. If not, we assume 
+ *   that the first argument must be a command, and we run the command on 
+ *   the paths in initpath. Fork to a child process, and parent process
+ *   will wait depending on whether or not parseline returns a background
+ *   job or foreground job. Calls waitfg to do this. 
  */
 static void
 eval(const char *cmdline) 
@@ -305,38 +333,66 @@ eval(const char *cmdline)
 		return;
 	} 
 
-	// Not a built-in command.
-	if (bg == 0)
-		bg = 2; // For some reason bg = 2 for addjob, but 0 from parseline.
-	
-	sigset_t temp, prev, all;
-	sigfillset(&all);
-	sigemptyset (&temp);
-	sigaddset(&temp, SIGCHLD);
+	// Not a built-in command,
 
-	signal(SIGCHLD, sigchld_handler);
-	sigprocmask(SIG_BLOCK, &temp, &prev);
+	sigset_t temp; 
+	if (sigaddset(&temp, SIGCHLD) == -1) {
+		unix_error("error on sigaddset in eval"); 
+	}
+
+	
+	if (sigprocmask(SIG_BLOCK, &temp, NULL) == -1) {
+		unix_error("error on sigprocmask in eval");
+	}
 	// Blocking here to avoid datarace if child executes before addjob.
 	pid = fork();
+
 	if (pid == 0) {
 		// Child
 		setpgid(0,0);
-		sigprocmask(SIG_SETMASK, &prev, NULL); 
-		// Try to execute on every path in path. 
-		volatile struct list *head;
-		for (head = paths; head != NULL; head = head->tail_list) {
-			execve(head->name, argv, environ);
+		if (sigprocmask(SIG_UNBLOCK, &temp, NULL) == -1) {
+			unix_error("error on sigprocmask in eval");
 		}
-		// Third input to execve is an environment, I don't know what to pass.
-		app_error("Error executing function"); // Execve never returns.
+
+		// Try to execute on every path in path. 
+
+		struct list *head;
+		execve(argv[0],argv,environ);
+		char* temppath;
+		for (head = paths; head != NULL && head->name != NULL; head = head->tail_list) {
+			temppath = malloc(strlen(head->name) * 4 + strlen(argv[0]) * 4 + 8);
+			temppath = strcpy(temppath, head->name);
+			temppath = strcat(temppath,"/");
+			temppath = strcat(temppath, argv[0]);
+			execve(temppath, argv, environ);
+			//Sio_puts(temppath);
+			//Sio_puts("\n");
+			free(temppath);
+
+		}
+		// Should never make it past the execve calls unless command DNE.
+		Sio_puts(argv[0]);
+		Sio_puts(": Command not found\n");
+		exit(0);
+		
 	} else {
 		// Parent
-		sigprocmask(SIG_BLOCK, &all, NULL);
-		addjob(jobs, pid, bg, cmdline); 
-		sigprocmask(SIG_UNBLOCK, &prev, NULL);
-		if (bg == 1) {
+		if (addjob(jobs, pid, bg+1, cmdline) == 0) {
+			// addjob can fail if we have more than the allotted number of jobs
+			// in the jobs struct. 
+			return;
+		} 
+
+		// Continue handling the job. 
+		if (sigprocmask(SIG_UNBLOCK, &temp, NULL) == -1) {
+			unix_error("error on sigprocmask in eval");
+		}
+		if (bg == 0) {
 			//Run in foreground
 			waitfg(pid);
+		} else {
+			// Here we print the job information after adding.
+			printf("[%i] (%i) %s", getjobpid(jobs,pid)->jid, pid, cmdline);
 		}
 	}
 	return; // Either is a bg task, or fg task finished. 
@@ -413,10 +469,11 @@ parseline(const char *cmdline, char **argv)
  *  it immediately.  
  *
  * Requires:
- *   <to be filled in by the student(s)>
+ *   argv, an array of strings representing a tokenized commandline
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   Implements the builtin commands: bg and fg call do_bgfg, quit exits, and
+ *   jobs calls listjobs.
  */
 static int
 builtin_cmd(char **argv) 
@@ -438,10 +495,13 @@ builtin_cmd(char **argv)
  * do_bgfg - Execute the built-in bg and fg commands.
  *
  * Requires:
- *   <to be filled in by the student(s)>
+ *   argv, an array of string representing the commandline in tokens 
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   Implements the bg and fg builtin commands. Will take a jobid or a PID,
+ *   then use the kill command to send SIGCONT to those jobs. Lots of error 
+ *   handling to make sure that the ids are of the correct format and 
+ *   actually have associated job pointers. 
  */
 static void
 do_bgfg(char **argv) 
@@ -456,25 +516,64 @@ do_bgfg(char **argv)
 	}
 	id = atoi(job);
 	pid = (pid_t) id;
-	if (id == 0) {
-		app_error("Jid/Pid < 1");
+	if (id < 0) {
+		printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+		return;
 	}
 
 	if (strcmp(argv[0], "bg") == 0) {
 		// Send SIGCONT to the specified job.
 		if (isPid) {
+<<<<<<< HEAD
 			kill(pid, SIGCONT);
+=======
+			if (getjobpid(jobs, pid) == NULL) {
+				printf("(%i) No such process\n", id);
+				return;
+			}
+			printf("[%i] (%i) %s", getjobpid(jobs,pid)->jid, pid, getjobpid(jobs,pid)->cmdline);
+			getjobpid(jobs,pid)->state = BG;
+			if (kill(pid, SIGCONT) == 1) {
+				unix_error("Error sending SIGCONT in do_bgfg");
+			} 
+>>>>>>> b547fb2ac1bfc303c44e83c55f85365ba441071f
 		} else {
+			if (getjobjid(jobs,id) == NULL) {
+				printf("%%%i No such job\n", id);
+				return;
+			}
 			pid = getjobjid(jobs, id)->pid;
-			kill(pid, SIGCONT);
+			printf("[%i] (%i) %s", id, pid, getjobpid(jobs,pid)->cmdline);
+			getjobpid(jobs,pid)->state = BG;
+			if (kill(pid, SIGCONT) == 1) {
+				unix_error("Error sending SIGCONT in do_bgfg");
+			}
 		}
 	} else if (strcmp(argv[0], "fg") == 0) {
 		// Send SIGCONT to the specified job.
 		if (isPid) {
+<<<<<<< HEAD
 			kill(pid, SIGCONT);
+=======
+			if (getjobpid(jobs, pid) == NULL) {
+				printf("(%i) No such process\n", id);
+				return;
+			}
+			getjobpid(jobs,pid)->state = FG;
+			if (kill(pid, SIGCONT) == 1) {
+				unix_error("Error sending SIGCONT in do_bgfg");
+			}
+>>>>>>> b547fb2ac1bfc303c44e83c55f85365ba441071f
 		} else {
+			if (getjobjid(jobs,id) == NULL) {
+				printf("%%%i No such job\n", id);
+			}
 			pid = getjobjid(jobs, id)->pid;
-			kill(pid, SIGCONT);
+			getjobpid(jobs,pid)->state = FG;
+			if (kill(pid, SIGCONT) == 1) {
+				unix_error("Error sending SIGCONT in do_bgfg");
+				return;
+			}
 		}
 		// Wait for current foreground process to finish.
 		waitfg(pid);
@@ -487,20 +586,23 @@ do_bgfg(char **argv)
  * waitfg - Block until process pid is no longer the foreground process.
  *
  * Requires:
- *   <to be filled in by the student(s)>
+ *   A pid, which represents the process id of the process we want to wait on.
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   Uses the child handler to ensure that the job is deleted from the jobs 
+ *   array when the child finishes normally or is terminated/stopped. Uses
+ *   a while loop to sleep forever until the childhandler reaps. 
  */
 static void
 waitfg(pid_t pid)
 {
-	int status;
-
-	waitpid(pid, &status, WUNTRACED); 
-	while (!WIFEXITED(status) && !WIFSIGNALLED(status)) {
-		waitpid(pid, &status, WUNTRACED);
+	int fpid;
+	fpid = fgpid(jobs);
+	while (fpid != 0 && pid == fgpid(jobs)) {
+		fpid = (fgpid(jobs));
+		sleep(1);
 	}
+
 }
 
 /* 
@@ -511,26 +613,35 @@ waitfg(pid_t pid)
  *   "pathstr" is a valid search path.
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   Creates and stores a linkedlist in the global field paths. Represents a 
+ *   list of all the possible paths to try and execute a command in.
  */
 static void
 initpath(const char *pathstr)
 {	
 	struct list *pathList = malloc(sizeof(struct list));
-	bool first = true;
-	char *found = malloc((strlen(pathstr) + 1) * 4);
-	strcpy(found, pathstr);
-	while ((found = strsep(&found,":")) != NULL) {
+	char *original = malloc((strlen(pathstr) + 1) * 4);
+	strcpy(original, pathstr);
+	char *found;
+
+	while ((found = strsep(&original,":")) != NULL) {
 		if (strcmp(found, "") == 0) {
 			getcwd(found, sizeof(found));
 		}
 		struct list *pathListTemp = malloc(sizeof(struct list));
 		pathListTemp->name = found;
-		if (!first) {
-			pathListTemp->tail_list = pathList;
-			paths = pathList;
-		}
+		pathListTemp->tail_list = pathList;
 		pathList = pathListTemp;
+	}
+
+	paths = pathList;
+
+	if (verbose) {
+		struct list *head;
+		for (head = paths; head != NULL; head = head->tail_list) {
+			printf(head->name);
+			printf("\n");
+		}
 	}
 }
 
@@ -546,28 +657,46 @@ initpath(const char *pathstr)
  *  currently running children to terminate.  
  *
  * Requires:
- *   <to be filled in by the student(s)>
+ *   Signum, although this input isn't used nor necessary
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   Uses waitpid to check if a job was terminated or stopped, then reaps
+ *   the child and prints the required message. Deletes the job from the 
+ *   jobs array when done, so that waitfg can stop sleeping. 
  */
 static void
 sigchld_handler(int signum)
 {
-
-	sigset_t temp, prev;
 	pid_t pid;
+	int status;
 
 	// Don't know what to do with signum
 	(void)signum;
 
-	sigfillset(&temp);
-	while ((pid = waitpid(-1, NULL, 0)) > 0) {
-		// Reap Children mwahaha.
-		sigprocmask(SIG_BLOCK, &temp, &prev);
-		deletejob(jobs, pid);
-		Sio_puts("Terminating children\n");
-		sigprocmask(SIG_SETMASK, &prev, NULL);
+
+	while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+		// Reap Children mwahaha
+		if (WIFSTOPPED(status)) {
+			Sio_puts("Job [");
+			Sio_putl(getjobpid(jobs,pid)->jid);
+			Sio_puts("] (");
+			Sio_putl(pid);
+			Sio_puts(") stopped by signal SIG");
+			Sio_puts(signame[WSTOPSIG(status)]);
+			Sio_puts("\n");
+			getjobpid(jobs,pid)->state = 3; //3 = ST
+		} else if ((status)) {
+			Sio_puts("Job [");
+			Sio_putl(getjobpid(jobs,pid)->jid);
+			Sio_puts("] (");
+			Sio_putl(pid);
+			Sio_puts(") terminated by signal SIG");
+			Sio_puts(signame[WTERMSIG(status)]);
+			Sio_puts("\n");
+			deletejob(jobs, pid);
+		} else {
+			deletejob(jobs,pid);
+		}
 	}
 
 }
@@ -578,23 +707,23 @@ sigchld_handler(int signum)
  *  to the foreground job.  
  *
  * Requires:
- *   <to be filled in by the student(s)>
+ *   signum, the signal (should be sigint) to pass along.
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   Forwards sigint to all foreground processes. 
  */
 static void
 sigint_handler(int signum)
 {
 
-	// Prevent an "unused parameter" warning.
 	if (fgpid(jobs) != 0) {
 		if (getpgid(fgpid(jobs)) != -1) {
-			kill(getpgid(fgpid(jobs)) * -1, signum);
+			if (kill(getpgid(fgpid(jobs)) * -1, signum) == 1) {
+				Sio_error("Error sending sigint in handler");
+			}
 		}
 	}
-	Sio_puts("Sending SIGINT to process after receipt of SIGINT signal\n");
-	_exit(0);
+	
 }
 
 /*
@@ -603,10 +732,10 @@ sigint_handler(int signum)
  *  foreground job by sending it a SIGTSTP.  
  *
  * Requires:
- *   <to be filled in by the student(s)>
+ *   signum, the signal (should be sigtstp) to pass along.
  *
  * Effects:
- *   <to be filled in by the student(s)>
+ *   Forwards sigtstp to all forground processes.
  */
 static void
 sigtstp_handler(int signum)
@@ -615,11 +744,13 @@ sigtstp_handler(int signum)
 	// Prevent an "unused parameter" warning.
 	if (fgpid(jobs) != 0) {
 		if (getpgid(fgpid(jobs)) != -1) {
-			kill(getpgid(fgpid(jobs)) * -1, signum);
+			if (kill(getpgid(fgpid(jobs)) * -1, signum) == 1) {
+				Sio_error("Error sending sigtstp in handler");
+			}
 		}
 	}
-	Sio_puts("Sending SIGTSTP to process after receipt of SIGTSTP signal\n");
-	_exit(0);
+	
+	
 }
 
 /*
