@@ -6,7 +6,7 @@ COMP 321 Project 4: Unix Shell
 
 DESIGN DESCRIPTION
 
-We went about designing our shell by tacklikng each individual method at a
+We went about designing our shell by tackling each individual method at a
 time. Thus, we will describe our design description by going through our
 approach for each method.
 
@@ -15,17 +15,17 @@ eval:
 In eval, we tried to cover every possible command line input we could expect.
 We started dealing with the cases of an empty console and the built-in
 commands that were given (e.g. quit, jobs, bg, and fg) and then moved onto
-non-built-in in commands. Then, to avoid a datarace, we create a set for the
-child process and block it until the parent task can create the child task.
+non-built-in in commands. Then, to avoid a datarace, we create a signal set 
+for SIGCHLD and block it until the parent task can call add job.
 From there we split into whether the process at hand is a parent or child
 process, which we can see from the pid returned from fork. If the process is a
-child, then we unblock it usint the SIG_UNBLOCK signal and then try to run the
+child, then we unblock it using the SIG_UNBLOCK signal and then try to run the
 command from the command line using every filepath that we found in initpath.
 If we get through all the execve calls, we know that the command was not found
 and we can output the proper response. If the process is a parent process,
-then we simply try to add the job using addjob and the specified pid. If that
-doesn't work then continue handling the job by unblocking the children
-processes and either trying to run it in the foreground of background.
+then we simply try to add the job using addjob and the specified pid. Then,
+continue handling the job by calling waitfg(pid) if the job is fg, otherwise
+eval ends.
 
 builtin_cmd:
 For built in command, we created an if else structure to check which of the
@@ -42,13 +42,13 @@ both, we check to see if we were given the JID or PID. If the JID was given we
 find the PID and then send a SIGCONT signal to that job. However, if the
 process is a foreground process then we wait for the current foreground
 process to finish using the waitfg method. We also check to see if we ever
-reeive any errors trying to send the SIGCONT signal or make sure the job
+receive any errors trying to send the SIGCONT signal or make sure the job
 specified exists, letting the user know with the proper messages if not.
 
 wait_fg:
 We simply continue to check the process id of the foreground process, checking
-to see if the input pid is still running in the foreground, and waiting
-continuously until it finishes.
+to see if the input pid is still running in the foreground using the jobs 
+struct, and sleeping until its no longer running.
 
 initpath:
 In init path, we got the given pathstring (pathstr) and split it using strsep
@@ -57,15 +57,16 @@ current filepath. Then we added each path into a linked list structure we made
 to get all of the potential paths.
 
 sigchld_handler:
-We used a while loop to check whether or not a job was terminated using the
-waitpid method. If that is the case, we either output that the specified job
-was stopped/terminated into the command line, stopping/terminating all of the
-children processes depending on the signal.
+We used a while loop to reap all of the possible children using waitpid(-1).
+Using the return from waitpid, we separate into three cases: stopped, 
+terminated, or finished naturally. We print the right messages for each of 
+the three cases, and call deletejob() so that the jobs struct accurately 
+updates and waitfg can move on.
 
 signint_handler and sigstp_handler:
-We make sure that there is a process in the foreground, and that it has a
-valid pid. If that is the case, then we send it a signint/sigtstp signal to
-the specified foreground job.
+We make sure that there is a process in the foreground, and that it has the 
+correct pid. If so, then we send it a signint/sigtstp signal to
+the specified foreground job using kill.
 
 
 
@@ -84,11 +85,15 @@ sure that each of these commands didn't fail or throw any unexpected errors
 (e.g. segfault) and made sure the output was the same as the tshref given.
 
 do_bgfg:
-We tested this one by calling bg and fg with different job pids and jids, making sure that the proper errors are thrown when certain things occur that
-are the same as the tshref.
+We tested this one by calling bg and fg with different job pids and jids,
+making sure that the proper errors are thrown when certain things occur that
+are the same as the tshref. For example, if we input a negative jobid,
+or if we specify a jobid that doesn't exist in the jobs struct.
 
 wait_fg:
-To test this, we tried to make another foreground process while there was already a foreground process happening, making sure that it properly waited for the current foreground process to finish and we didn't run into an
+To test this, we tried to make another foreground process while there was 
+already a foreground process happening, making sure that it properly 
+waited for the current foreground process to finish and we didn't run into an
 infinite loop or any miscellanous errors.
 
 initpath:
@@ -96,7 +101,8 @@ We used the verbose path to print out all the paths that were added to our
 paths list to make sure that we got every single path that was necessary.
 
 sigchld_handler and signint_handler and sigstp_handler:
-We tested these by typing both ctrl-z and ctrl-c into our console and making sure that what happened matched tshref.
+We tested these by typing both ctrl-z and ctrl-c into our console and 
+making sure that what happened matched tshref.
 
 
 Next we used the given tracers to make sure all
