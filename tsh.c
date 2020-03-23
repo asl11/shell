@@ -524,9 +524,6 @@ do_bgfg(char **argv)
 	if (strcmp(argv[0], "bg") == 0) {
 		// Send SIGCONT to the specified job.
 		if (isPid) {
-<<<<<<< HEAD
-			kill(pid, SIGCONT);
-=======
 			if (getjobpid(jobs, pid) == NULL) {
 				printf("(%i) No such process\n", id);
 				return;
@@ -536,7 +533,6 @@ do_bgfg(char **argv)
 			if (kill(pid, SIGCONT) == 1) {
 				unix_error("Error sending SIGCONT in do_bgfg");
 			} 
->>>>>>> b547fb2ac1bfc303c44e83c55f85365ba441071f
 		} else {
 			if (getjobjid(jobs,id) == NULL) {
 				printf("%%%i No such job\n", id);
@@ -552,9 +548,6 @@ do_bgfg(char **argv)
 	} else if (strcmp(argv[0], "fg") == 0) {
 		// Send SIGCONT to the specified job.
 		if (isPid) {
-<<<<<<< HEAD
-			kill(pid, SIGCONT);
-=======
 			if (getjobpid(jobs, pid) == NULL) {
 				printf("(%i) No such process\n", id);
 				return;
@@ -563,7 +556,6 @@ do_bgfg(char **argv)
 			if (kill(pid, SIGCONT) == 1) {
 				unix_error("Error sending SIGCONT in do_bgfg");
 			}
->>>>>>> b547fb2ac1bfc303c44e83c55f85365ba441071f
 		} else {
 			if (getjobjid(jobs,id) == NULL) {
 				printf("%%%i No such job\n", id);
