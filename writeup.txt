@@ -95,10 +95,7 @@ initpath:
 We used the verbose path to print out all the paths that were added to our
 paths list to make sure that we got every single path that was necessary.
 
-sigchld_handler:
-
-
-signint_handler and sigstp_handler:
+sigchld_handler and signint_handler and sigstp_handler:
 We tested these by typing both ctrl-z and ctrl-c into our console and making sure that what happened matched tshref.
 
 
